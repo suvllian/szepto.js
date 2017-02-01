@@ -1,7 +1,8 @@
 var sZepto = (function() {
-	var emptyArray = [], filter = emptyArray.filter, slice = emptyArray.slice,
+	var emptyArray = [], classList, filter = emptyArray.filter, slice = emptyArray.slice,
 		fragmentRE = /^\s*<(\w+|!)[^>]*>/,
-		impleSelectorRE = /^[\w-]*$/,
+		readyRE = /complete|loaded|interactive/,
+		simpleSelectorRE = /^[\w-]*$/,
 		class2type = {},
 		toString = class2type.toString,
 		zepto = {},
@@ -55,6 +56,17 @@ var sZepto = (function() {
 
 	// 返回给定值和键值的值
 	uniq = function(array) { return filter.call(array, function(item, index) { return array.indexOf(item) == index; }); }
+
+	function classRE(name) {
+		return name in classCache ? 
+			classCache[name] : (classCache[name] = new RegExp('(^|\\s)' + name + '(\\s|$)'))
+	}
+	// children属性不存在则遍历childNodes，如果是Node类型则返回
+	// 返回是一个数组
+	function children(element) {
+		return 'children' in  element ? 
+			slice.call(element.children) : $.map(element.childNodes, function(node) {if (node.nodeType == 1) return node;})
+	}
 
 	function Z(dom,selector) {
 		var i = 0,len = dom ? dom.length : 0;
@@ -160,6 +172,10 @@ var sZepto = (function() {
 			);
 	}
 
+	function filtered(nodes, selector) {
+		return selector == null ? $(nodes) : $(nodes).filter(selector);
+	}
+
 	$.contains = document.docmentElement.contains ? 
 		function(parent, node) {
 			return parent !== node && parent.contains(node);
@@ -170,6 +186,22 @@ var sZepto = (function() {
 			}
 			return false;
 		}
+
+	function funcArg(node, arg, index, payload) {
+		return isFunction(arg) ? arg.call(context, index, payload) : arg;
+	}
+
+	function setAttribute(node, name, value) {
+		value == null ? node.removeAttribute(name) : node.setAttribute(name, value);
+	}
+
+	// 如果传递了value，则修改node的class，没有传递则返回node的class
+	function className(node, value) {
+		var klass = node.className || '',
+			svg   = klass && klass.baseVal !== undefined;
+		if (value === undefined) { return svg ? klass.baseVal :klass; }
+			svg ? (klass.baseVal = value) : (node.className = value);
+	}
 
 	// 将函数指针赋值给“$”，使其称为“$”的属性
 	$.type = type;
@@ -248,6 +280,50 @@ var sZepto = (function() {
 		splice: emptyArray.splice,
 		indexOf: emptyArray.indexOf,
 
+		// 判断文档是否加载完成
+		// 1、通过判断document.readyState属性
+		// 2、通过DOMContentLoaded事件判断
+		ready: function(callback) {
+			if (readyRE.test(document.readyState) && document.body) { callback($) }
+			else { document.addEventListener('DOMContentLoaded', function(){ callback($)}, false)}
+			return this;
+		},
+
+		// 对this中的每个节点执行函数，将其parentNode赋值给node，
+		// 直至parentNode为document，且ancestors数组中不存在该节点，则将其存入数组中
+		// 最后返回数组
+		parents: function(selector) {
+			var ancestors = [], nodes = this;
+			while (nodes.length > 0) {
+				nodes = $.map(nodes, function(node){
+					if ((node = node.parentNode) && !isDocument(node) && ancestors.indexOf(node) < 0) {
+						ancestors.push(node);
+						return node;
+					}
+				})
+			}
+			 return filtered(ancestors, selector);
+		},
+
+		// 返回兄弟节点
+		// 通过该节点的父亲节点得到NodeList，然后返回除了自己的数组。
+		siblings: function(selector) {
+			return filtered(this.map(function(i, el){
+				return filter.call(children(el.parentNode), function(child) { return child !== el;})
+			}), selector);
+		}
+
+		closest: function(selector, context) {
+			var nodes = [], collection = typeof selector == 'object' && $(selector);
+			this.each(function(_, node){
+				while (node && !(collection ? collection.indexOf(node) >= 0 : zepto.matches(node, selector))){
+					node = node !== context && !isDocument(node) && node.parentNode;
+				}
+				if (node && nodes.indexOf(node) < 0) { nodes.push(node); }
+			})
+			return $(nodes);
+		}
+
 		concat: function() {
 			var i, value, args =[];
 			for (i = 0; i < arguments.length; i++) {
@@ -255,6 +331,42 @@ var sZepto = (function() {
 				args[i] = zepto.isZ(value) ? value.toArray() : value;
 			}
 			return concat.apply(zepto.isZ(this) ? this.toArray() : this, args);
+		},
+
+		filter: function(selector) {
+			if (isFunction(selector)) { return this.not(this.not(selector)); }
+			return $(filter.call(this, function(element){
+				return zepto.matches(element, selector);
+			}))
+		},
+
+		has: function(selector) {
+			return this.filter(function(){
+				return isObject(selector) ? 
+					$.contains(this, selector) : 
+					$(this).find(selector).size();
+			})
+		},
+
+		// 
+		not: function(selector) {
+			var nodes = [];
+			if (isFunction(selector) && selector.call !== undefined){
+				this.each(function(index){
+					if (!selector.call(this, index)){
+						nodes.push(this);
+					}
+				})
+			} else {
+				var excludes = typeof selector == 'string' ? this.filter(selector) :
+					(likeArray(selector) && isFunction(selector.item)) ? slice.call(selector) : $(selector);
+				this.forEach(function(el){
+					if (excludes.indexOf(el) < 0) {
+						nodes.push(el);
+					}
+				})
+			}
+			return $(nodes);
 		},
 
 		get: function(index) {
@@ -293,12 +405,25 @@ var sZepto = (function() {
 			})
 		},
 
+		// 
 		each: function(callback) {
 			emptyArray.every.call(this, function(el, index) {
-				return callback.call(el, index,el) !== false;
+				return callback.call(el, index, el) !== false;
 			});
 			return this;
-		}
+		},
+
+		parent: function(selector) { return filtered(uniq(this.pluck('parentNode')), selector); },
+
+		children: function(selector) { return filtered(this.map(function(){ return children(this) }), selector); },
+
+		contents: function() {
+			return this.map(function() { return this.contentDocument || slice.call(this.childNodes)})
+		},
+
+		clone: function(){ return this.map(function(){ return this.cloneNode(true) }) },
+
+		hide: function(){ return this.css("display", "none"); },
 
 		find: function(selector) {
 			var result, $this = this;
@@ -315,5 +440,62 @@ var sZepto = (function() {
 			else { result = this.map(function() { retu zepto.qsa(this, selector); }); }
 			return result;
 		},
+
+		empty: function(){ return this.each(function(){ this.innerHTML = ''}); },
+
+		show:function(){
+			return this.each(function(){
+				this.style.display == "none" && (this.style.display = '')
+				if (getComputedStyle(this, '').getPropertyValue("display") == "none") {
+					this.style.display = defaultDisplay(this.nodeName);
+				}
+			})
+		},
+
+		html: function(html) {
+			return 0 in arguments ?
+				this.each(function(index){
+					var originHtml = this.innerHTML;
+					$(this).empty().append(funcArg(this, html, index, originHtml))
+				}) :
+				(0 in this ? this[0].innerHTML : null);
+		}
+
+		// element存在则返回其位置，不存在则返回this第一项在this中的位置
+		index: function(element) {
+			return element ? this.indexOf($(element)[0]) : this.parent().children().indexOf(this[0]);
+		},
+
+		hasClass: function(name) {
+			if (!name) { return false;}
+			return emptyArray.some.call(this, function(el){
+				return this.test(className(el));
+			}, classRE(name));
+		},
+
+		addClass: function(name) {
+			if (!name) { return this; }
+			return this.each(function(index){
+				if (!('className' in this)) { return }
+				classList = [];
+				var cls = className(this), newName = funcArg(this, name, index, cls);
+				newName.split(/\s+/g).forEach(function(klass){
+					if (!$(this).hasClass(klass)) { classList.push(klass) }
+				}, this);
+				classList.length && className(this, cls + (cls ? " " : "") + classList.join(" "));
+			})
+		},
+
+		removeClass: function(name){
+			return this.each(function(index){
+				if (!('className' in this)) { return }
+				if (name === undefined) { return className(this, '') }
+				classList = className(this);
+				funcArg(this, name, index, classList).split(/\s+/g).forEach(function(klass) {
+					classList = classList.replace(classRE(klass), " ");
+				});
+				className(this, classList.trim());
+			}
+		}
 	}
 })
