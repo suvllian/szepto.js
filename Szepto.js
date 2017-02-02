@@ -7,6 +7,20 @@ var sZepto = (function() {
 		toString = class2type.toString,
 		zepto = {},
 		tempParent = document.createElement('div'),
+		propMap = {
+			'tabindex': 'tabIndex',
+			'readonly': 'readOnly',
+			'for': 'htmlFor',
+			'class': 'className',
+			'maxlength':'maxLength',
+			'cellspacing': 'cellSpacing',
+			'cellpadding': 'cellPadding',
+			'rowspan': 'rowSpan',
+			'colspan': 'colSpan',
+			'usemap': 'useMap',
+			'frameborder': 'frameBorder',
+			'contenteditable': 'contentEditable'
+		},
 		isArray = Array.isArray || 
 			function(object) { return object instanceof Array };
 
@@ -348,6 +362,58 @@ var sZepto = (function() {
 			})
 		},
 
+		replaceWith: function(newContent) {
+			return this.before(newContent).remove();
+		},
+
+		warp: function(structure) {
+			var func = isFunction(structure);
+			if (this[0] && !func) {
+				var dom = $(structure).get(0),
+					clone = dom.parentNode || this.length > 1;
+			}
+
+			return this.each(function(index){
+				$(this).warpAll(
+					func ? structure.call(this, index) :
+						clone ? dom.cloneNode(true) : dom
+				)
+			})
+		},
+
+		warpAll: function(structure){
+			$(this[0]) {
+				$(this[0]).before(structure = $(structure));
+				var children;
+				while ((children = structure.children()).length) { structure = children.first() }
+				$(structure).append(this);
+			}
+			return this;
+		},
+
+		warpInner: function(structure) {
+			var func = isFunction(structure);
+			return this.each(function(index){
+				var self = $(this), contents = self.contents(),
+					dom = func ? structure.call(this, index) : structure;
+				contents.length ? contents.warpAll(dom) : self.append(dom)
+			})
+		},
+
+		unwarp: function(){
+			this.parent().each(function(){
+				$(this).replaceWith($(this).children())
+			})
+			return this;
+		},
+
+		toggle: function(setting){
+			return this.each(function(){
+				var el = $(this);
+				(setting === undefined ? el.css("display") == "none" : setting) ? el.show() : el.hide()
+			})
+		},
+
 		// 
 		not: function(selector) {
 			var nodes = [];
@@ -423,8 +489,6 @@ var sZepto = (function() {
 
 		clone: function(){ return this.map(function(){ return this.cloneNode(true) }) },
 
-		hide: function(){ return this.css("display", "none"); },
-
 		find: function(selector) {
 			var result, $this = this;
 			if (!selector) { result = $(); }
@@ -443,6 +507,8 @@ var sZepto = (function() {
 
 		empty: function(){ return this.each(function(){ this.innerHTML = ''}); },
 
+		pluck: function(property) { return $.map(this, function(el) { return el[property] } )},
+
 		show:function(){
 			return this.each(function(){
 				this.style.display == "none" && (this.style.display = '')
@@ -451,6 +517,8 @@ var sZepto = (function() {
 				}
 			})
 		},
+
+		hide: function(){ return this.css("display", "none"); },
 
 		html: function(html) {
 			return 0 in arguments ?
@@ -486,6 +554,196 @@ var sZepto = (function() {
 			})
 		},
 
+		attr: function(name, value){
+			var result;
+			return (typeof name == 'string' && !(1 in arguments)) ? 
+				(0 in this && this[0].nodeType == 1 && (result = this[0].getAttribute(name)) != null ? result : undefined) :
+				this.each(function(index){
+					if (this.nodeType !== 1) { return }
+					if (isObject(name)) {
+						for (key in name) { setAttribute(this, key, name[key]) }
+					} else {
+						setAttribute(this, name, funcArg(this, value, index, this.getAttribute(name)))
+					}
+				})
+		},
+
+		removeAttr: function(name) {
+			return this.each(function(){
+				this.nodeType === 1 && name.split(' ').forEach(function(attibute){
+					setAttribute(this, attibute);
+				}, this)
+			})
+		},
+
+		prev: function(selector) { return $(this.pluck('previousElementSibling')).filter(selector || '*') },
+		next: function(selector) { return $(this.pluck('nextElementSibling')).filter(selector || '*') },
+
+		val: function(value) {
+			if (0 in arguments) {
+				if (value == null) { value = ""; }
+				return this.each(function(index){
+					this.value = funcArg(this, value, index, this.value);
+				})
+			} else {
+				return this[0] && (this[0].multiple ? 
+					$(this[0]).find('option').filter(function(){ return this.selected }).pluck('value') : 
+					this[0].value);
+			}
+		},
+
+		data: function(name, value){
+			var attrName = 'data-' + name.replace(capitalRE, '-$1').toLowerCase();
+			var data = (1 in arguments) ? 
+				this.attr(attrName, value) : 
+				this.attr(attrName);
+			return data !== null ? deserializeValue(data) : undefined;
+		},
+
+		text: function(text) {
+			return 0 in arguments ? 
+				this.each(function(index){
+					var newText = funcArg(this, text, index, this.textContent);
+					this.textContent = newText == null ? '' : '' + newText;
+				}) :
+				(0 in this ? this.pluck('textContent').join("") : null);
+		},
+
+		prop: function(name, value) {
+			name = propMap[name] || name;
+			return (1 in arguments) ? 
+				this.each(function(index){
+					this[name] = funcArg(this, value, index, this[name]);
+				}) : 
+				(this[0] && this[0][name]);
+		},
+
+		removeProp: function(name){
+			name = propMap[name] || name;
+			return this.each(function() { delete this[name] });
+		},
+
+		offset: function(coordinates){
+			if (coordinates) { return this.each(function(index){
+				var $this = $(this),
+					coords = funcArg(this, coordinates, index, $this.offset()),
+					parentOffset = $this.offsetParent().offset(),
+					props = {
+						top: coords.top - parentOffset.top,
+						left: coords.left - parentOffset.left
+					};
+				if ($this.css('position' == 'static')) { props['position'] = 'relative';}
+				$this.css(props);
+			})}
+			if (!this.length) { return null; }
+			if (document.documentElement !== this[0] && !$.contains(document.documentElement, this[0])){
+				return {top: 0, left: 0}
+			}
+			var obj = this[0].getBoundingClientRect();
+			return {
+				left: obj.left + window.pageXOffset,
+				top: obj.top + window.pageYOffset,
+				width: Math.round(obj.width),
+				height:Math.round(obj.height)
+			}
+
+		},
+
+		position:function(){
+			if (!this.length) { return }
+			var elem = this[0],
+				offsetParent = this.offsetParent(),
+				offset = this.offset(),
+				parentOffset = rootNodeRE.test(offsetParent[0].nodeName) ? {top: 0, left: 0} : offsetParent.offset();
+
+			offset.top -= parseFloat($(elem).css('margin-top')) || 0;
+			offset.left -= parseFloat($(elem).css('margin-left')) || 0;
+
+			parentOffset.top += parseFloat($(offsetParent[0]).css('border-top-width')) || 0;
+			parentOffset.left += parseFloat($(offsetParent[0]).css('border-left-width')) || 0;
+
+			return {
+				top: offset.top - parentOffset.top,
+				left: offset.left - parentOffset.left
+			}
+		},
+
+		css: function(property, value) {
+			if (arguments.length < 2){
+				var element = this[0]
+				if (typeof property == 'string') {
+					if (!element) { return }
+					return element.style[camelize(property)] || getComputedStyle(element, '').getPropertyValue(property);
+				} else if (isArray(property)) {
+					if (!element) { return }
+					var props = {}
+					var computedStyle = getComputedStyle(element, '')
+					$.each(property, function(_, prop){
+						props[prop] = (element.style[camelize(prop)] || computedStyle.getPropertyValue(prop))
+					})
+					return props;
+				}
+			}
+
+			var css = '';
+			if (type(property) == 'string') {
+				if (!value && value !== 0){
+					this.each(function() { this.style.removeProperty(dasherize(property)) });
+				} else {
+					css = dasherize(property) + ":" + maybeAddPx(property, value);
+				}
+			} else {
+				for (key in property){
+					if (!property[key] && property[key] !== 0){
+						this.each(function() { this.style.removeProperty(dasherize(key)) })
+					} else {
+						css += dasherize(key) + ':' + maybeAddPx(key, property[key]) + ";"
+					}
+				}
+			}
+
+			return this.each(function(){ this.style.cssText += ';' + css })
+		},
+
+		scrollTop: function(value) {
+			if (!this.length) { return }
+			var hasScrollTop = 'scrollTop' in this[0];
+		if (value === undefined) { return hasScrollTop ? this[0].scrollTop : this[0].pageYOffset}
+		return this.each(hasScrollTop ? 
+			function(){ this.scrollTop = value } : 
+			function(){ this.scrollTo(this.scrollX, value) });
+		},
+
+		scrollLeft: function(value) {
+			if (!this.length) { return }
+				var hasScrollLeft = 'scrollLeft' in this[0];
+			if (value === undefined) { return hasScrollLeft ? this[0].scrollLeft : this[0].pageXOffset }
+			return this.each(hasScrollLeft ?
+				function(){ this.scrollLeft = value } : 
+				function(){ this.scrollTo(value, this.scrollY) })
+		},
+
+		offsetParent: function(){
+			return this.map(function(){
+				var parent = this.offsetParent || document.body;
+				while (parent && !rootNodeRE.test(parent.nodeName) && $(parent).css("position") == "static"){
+					parent = parent.offsetParent;
+				}
+				return parent;
+			})
+		},
+
+		toggleClass: function(name, when) {
+			if (!name) { return this }
+			return this.each(function(index){
+				var $this = $(this), names = funcArg(this, name, index, className(this));
+				names.split(/\s+/g).forEach(function(klass){
+					(when === undefined ? !$this.hasClass(klass) : when) ? 
+					$this.addClass(klass) : $this.removeClass(klass);
+				})
+			}) 
+		},
+
 		removeClass: function(name){
 			return this.each(function(index){
 				if (!('className' in this)) { return }
@@ -496,6 +754,6 @@ var sZepto = (function() {
 				});
 				className(this, classList.trim());
 			}
-		}
+		},
 	}
 })
