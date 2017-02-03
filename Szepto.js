@@ -7,6 +7,7 @@ var sZepto = (function() {
 		toString = class2type.toString,
 		zepto = {},
 		tempParent = document.createElement('div'),
+		adjacencyOperators = ['after', 'prepend', 'before', 'append'],
 		propMap = {
 			'tabindex': 'tabIndex',
 			'readonly': 'readOnly',
@@ -21,9 +22,11 @@ var sZepto = (function() {
 			'frameborder': 'frameBorder',
 			'contenteditable': 'contentEditable'
 		},
+		uniq,
 		isArray = Array.isArray || 
 			function(object) { return object instanceof Array };
 
+	// 判断一个元素是否匹配给定的选择器
 	zepto.matches = function(element, selector) {
 		if (!selector || !element || element.nodeType !== 1) { return false; }
 		var matchesSelector = element.matches || element.webkitMatchesSelector ||
@@ -66,15 +69,21 @@ var sZepto = (function() {
 
 	// 返回数组中不为空的项
 	function compact(array) { return filter.call(array, function(item) { return item != null; }); }
+	// 得到一个数组的副本
 	function flatten(array) { return array.length > 0 ? $.fn.concat.apply([], array) : array; }
 
-	// 返回给定值和键值的值
+	// 数组去重，如果数据在数组中的位置和索引不同，则有相同的项
 	uniq = function(array) { return filter.call(array, function(item, index) { return array.indexOf(item) == index; }); }
 
 	function classRE(name) {
 		return name in classCache ? 
 			classCache[name] : (classCache[name] = new RegExp('(^|\\s)' + name + '(\\s|$)'))
 	}
+
+	function maybeAddPx(name, value){
+		return (typeof value == "number" && !cssNumber[dasherize(name)]) ? value + "px" : value; 
+	}
+
 	// children属性不存在则遍历childNodes，如果是Node类型则返回
 	// 返回是一个数组
 	function children(element) {
@@ -108,7 +117,7 @@ var sZepto = (function() {
 			selector = selector.trim();
 
 			if (selector[0] == '<' && fragmentRE.test(selector)) {
-
+				dom = zepto.fragment(selector, RegExp.$1, context), selector = null;
 			}
 			// context有值
 			else if (context !== undefined) {
@@ -129,7 +138,9 @@ var sZepto = (function() {
 			// selector是一个对象
 			else if (isObject(selector)) { dom = [selector], selector = null; }
 			// selector是一个html标签，则创建节点
-			else if (fragmentRE.test(selector)) {  }
+			else if (fragmentRE.test(selector)) { 
+				dom = zepto.fragment(selector.trim(), RegExp.$1, context), selector = null; 
+			}
 			// context有值
 			else if (context !== undefined) { return $(context).find(selector); }
 			else { dom = zepto.qsa(document, selector); }
@@ -190,6 +201,9 @@ var sZepto = (function() {
 		return selector == null ? $(nodes) : $(nodes).filter(selector);
 	}
 
+	// 判断是否包含指定节点
+	// document.documentElement.contains是IE特有的方法
+	// 其他浏览器则循环判断
 	$.contains = document.docmentElement.contains ? 
 		function(parent, node) {
 			return parent !== node && parent.contains(node);
@@ -201,6 +215,7 @@ var sZepto = (function() {
 			return false;
 		}
 
+	// arg是函数则执行，否则直接返回arg
 	function funcArg(node, arg, index, payload) {
 		return isFunction(arg) ? arg.call(context, index, payload) : arg;
 	}
@@ -217,6 +232,20 @@ var sZepto = (function() {
 			svg ? (klass.baseVal = value) : (node.className = value);
 	}
 
+	// 获取节点默认的display属性
+	function defaultDisplay(nodeName){
+		var element, display;
+		if (!elementDisplay[nodeName]) {
+			element = document.createElement(nodeName);
+			document.body.appendChild(element);
+			display = getComputedStyle(element, '').getPropertyValue("display");
+			element.parentNode.removeChild(element);
+			display == "none" && (display = "block");
+			elementDisplay[nodeName] = display;
+		}
+		return elementDisplay[nodeName];
+	}
+
 	// 将函数指针赋值给“$”，使其称为“$”的属性
 	$.type = type;
 	$.isFunction = isFunction;
@@ -224,6 +253,10 @@ var sZepto = (function() {
 	$.isArray = isArray;
 	$.isPlainObject = isPlainObject;
 
+
+	$.uuid = 0;
+	$.support = { };
+	$.expr = {};
 	$.noop = function() {}
 
 	$.each = function(elements, callback) {
@@ -239,6 +272,12 @@ var sZepto = (function() {
 		}
 		return elements;
 	}
+
+	$.grep = function(elements, callback) {
+		return filter.call(elements, callback);
+	}
+
+	if (window.JSON) { $.parseJSON = JSON.parse; }
 
 	$.each("Boolean Number String Function Array Date RegExp Object Error".split(" "), function(i, name) {
 		class2type[ "[object " + name + "]"] = name.toLowerCase();
@@ -265,6 +304,9 @@ var sZepto = (function() {
 		return str == null ? "" : String.prototype.trim.call(str);
 	}
 
+	// 1、如果elements是类数组类型，则对数组成员执行回调函数
+	// 是对象对elements属性执行回调函数
+	// 2、将回调函数执行结果存入values数组中。
 	$.map = function(elements, callback) {
 		var value, values = [], i, key;
 		if (likeArray(elements)) {
@@ -319,7 +361,7 @@ var sZepto = (function() {
 			 return filtered(ancestors, selector);
 		},
 
-		// 返回兄弟节点
+		// 返回所有兄弟节点
 		// 通过该节点的父亲节点得到NodeList，然后返回除了自己的数组。
 		siblings: function(selector) {
 			return filtered(this.map(function(i, el){
@@ -327,6 +369,7 @@ var sZepto = (function() {
 			}), selector);
 		}
 
+		// 返回selector最先匹配的祖先元素
 		closest: function(selector, context) {
 			var nodes = [], collection = typeof selector == 'object' && $(selector);
 			this.each(function(_, node){
@@ -338,6 +381,7 @@ var sZepto = (function() {
 			return $(nodes);
 		}
 
+		// 添加对象形成一个新数组
 		concat: function() {
 			var i, value, args =[];
 			for (i = 0; i < arguments.length; i++) {
@@ -347,6 +391,9 @@ var sZepto = (function() {
 			return concat.apply(zepto.isZ(this) ? this.toArray() : this, args);
 		},
 
+		// 过滤对象集合
+		// 如果参数是函数，在函数返回有实际值时，元素被返回
+		// 双重否定
 		filter: function(selector) {
 			if (isFunction(selector)) { return this.not(this.not(selector)); }
 			return $(filter.call(this, function(element){
@@ -354,6 +401,8 @@ var sZepto = (function() {
 			}))
 		},
 
+		// 判断当前对象集合是否有符合选择器的元素，或者是否包含指定DOM节点
+		// 有则返回新的对象集合
 		has: function(selector) {
 			return this.filter(function(){
 				return isObject(selector) ? 
@@ -362,10 +411,13 @@ var sZepto = (function() {
 			})
 		},
 
+		// 将要替换的内容插入被替换的内容之前，然后删除被替换的内容
 		replaceWith: function(newContent) {
 			return this.before(newContent).remove();
 		},
 
+		// 在匹配的元素外层包上一个html元素
+		// 如果传入是字符串，则先创建DOM节点
 		warp: function(structure) {
 			var func = isFunction(structure);
 			if (this[0] && !func) {
@@ -381,6 +433,7 @@ var sZepto = (function() {
 			})
 		},
 
+		// 在所有匹配的元素外面包一个单独的结构
 		warpAll: function(structure){
 			$(this[0]) {
 				$(this[0]).before(structure = $(structure));
@@ -391,6 +444,7 @@ var sZepto = (function() {
 			return this;
 		},
 
+		// 将匹配的内容包裹在单独的结构中
 		warpInner: function(structure) {
 			var func = isFunction(structure);
 			return this.each(function(index){
@@ -400,6 +454,7 @@ var sZepto = (function() {
 			})
 		},
 
+		// 移除集合中元素的直接父节点，并将他们的子元素保留在原来的位置
 		unwarp: function(){
 			this.parent().each(function(){
 				$(this).replaceWith($(this).children())
@@ -407,6 +462,7 @@ var sZepto = (function() {
 			return this;
 		},
 
+		// 根据setting的布尔值显示或隐藏元素
 		toggle: function(setting){
 			return this.each(function(){
 				var el = $(this);
@@ -414,7 +470,8 @@ var sZepto = (function() {
 			})
 		},
 
-		// 
+		// 如果参数是函数，则执行函数，返回函数值为false的对象集合
+		// 如果是其他类型，则将其转换成zepto对象集合，并返回不在其中的元素的对象集合
 		not: function(selector) {
 			var nodes = [];
 			if (isFunction(selector) && selector.call !== undefined){
@@ -435,34 +492,46 @@ var sZepto = (function() {
 			return $(nodes);
 		},
 
+		// 从当前对象集合中获取所有元素或单个元素
+		// 返回的是DOM节点
 		get: function(index) {
 			return index === undefined ? slice.call(this) : this[index >= 0 ? index : index + this.length];
 		},
 
+		// 添加元素到集合中
 		add: function(selector, context) { return $(uniq(this.concat($(selector, context)))); },
 
+		// 提取数组的子集
 		slice: function() { return $(slice.apply(this, arguments)); },
 
+		// 
 		toArray: function(){ return this.get();	},
 
+		// 对象集合中元素的数量
 		size: function() { return this.length; },
 
+		// 传入函数，对this中每个成员执行函数
+		// 将函数执行结果传入构造函数，返回Node类型
 		map: function(fn) { return $($.map(this, function(el, i){ return fn.call(el, i, el) })); },
 
 		is: function(selector) { return this.length > 0 && zepto.matches(this[0], selector); },
 
-		eq: function(index) { return index === -1 ? this.slice(index) : this.slice(index, + index + 1) },
+		// 从对象集合中获取给定索引值的元素
+		eq: function(index) { return index === -1 ? this.slice(index) : this.slice(index, index + 1) },
 
+		// 获取当前对象集合的第一个元素
 		first: function() {
 			var el = this[0];
 			return el && !isObject(el) ? el : $(el);
 		},
 
+		// 获取当前对象集合的最后一个元素
 		last: function() {
 			var el = this[this.length - 1];
 			return el && !isObject(el) ? el : $(el);
 		}
 
+		// 从父节点中删除当前集合中的元素
 		remove: function() {
 			return this.each(function() {
 				if(this.parentNode != null) { 
@@ -471,7 +540,8 @@ var sZepto = (function() {
 			})
 		},
 
-		// 
+		// 对this中的每一项都执行回调函数
+		// 如果回调函数返回false，则循环停止	
 		each: function(callback) {
 			emptyArray.every.call(this, function(el, index) {
 				return callback.call(el, index, el) !== false;
@@ -479,16 +549,21 @@ var sZepto = (function() {
 			return this;
 		},
 
+		// 获取直接父元素
 		parent: function(selector) { return filtered(uniq(this.pluck('parentNode')), selector); },
 
+		// 获取对象集合中元素的直接子元素
 		children: function(selector) { return filtered(this.map(function(){ return children(this) }), selector); },
 
+		// 获取元素集合的子元素，包括文字和注释
 		contents: function() {
 			return this.map(function() { return this.contentDocument || slice.call(this.childNodes)})
 		},
 
+		// 深度克隆赋值集合中所有元素
 		clone: function(){ return this.map(function(){ return this.cloneNode(true) }) },
 
+		// 查找符合CSS选择器的元素的后代元素
 		find: function(selector) {
 			var result, $this = this;
 			if (!selector) { result = $(); }
@@ -505,10 +580,13 @@ var sZepto = (function() {
 			return result;
 		},
 
+		// 清空对象集合中每个元素的DOM内容
 		empty: function(){ return this.each(function(){ this.innerHTML = ''}); },
 
+		// 获取对象集合中每一个元素的属性值
 		pluck: function(property) { return $.map(this, function(el) { return el[property] } )},
 
+		// 显示元素
 		show:function(){
 			return this.each(function(){
 				this.style.display == "none" && (this.style.display = '')
@@ -518,8 +596,13 @@ var sZepto = (function() {
 			})
 		},
 
+		// 隐藏元素
 		hide: function(){ return this.css("display", "none"); },
 
+		// 获取或设置对象集合中元素的HTML内容
+		// 如果没有给定参数，则返回对象集合中第一个元素的的innerHTML
+		// 如果给定参数，则用其替换每个元素的内容
+		// 参数是函数，则执行
 		html: function(html) {
 			return 0 in arguments ?
 				this.each(function(index){
@@ -534,6 +617,7 @@ var sZepto = (function() {
 			return element ? this.indexOf($(element)[0]) : this.parent().children().indexOf(this[0]);
 		},
 
+		// 判断对象集合中的元素是否含有指定的class
 		hasClass: function(name) {
 			if (!name) { return false;}
 			return emptyArray.some.call(this, function(el){
@@ -541,6 +625,7 @@ var sZepto = (function() {
 			}, classRE(name));
 		},
 
+		// 为元素添加class
 		addClass: function(name) {
 			if (!name) { return this; }
 			return this.each(function(index){
@@ -754,6 +839,94 @@ var sZepto = (function() {
 				});
 				className(this, classList.trim());
 			}
-		},
+		}
 	}
+
+	$.fn.detach = $.fn.remove;
+
+	['width','height'].forEach(function(dimension){
+		var dimensionProperty = dimension.replace(/./, function(m){ return m[0].toUpperCase() });
+
+		$.fn[dimension] = function(value) {
+			var offset, el = this[0];
+			if (value === undefined) { return isWindow(el) ? el['inner' + dimensionProperty] : 
+				isDocument(el) ? el.documentElement['scroll' + dimensionProperty] : 
+				(offset = this.offset()) && offset[dimension];
+			} else {
+				return this.each(function(index) {
+					el = $(this);
+					el.css(dimension, funcArg(this, vlaue, index, el[dimension]()))
+				})
+			}
+		}
+	})
+
+	function traverseNode(node, fun){
+		fun(node);
+		for (var i = 0, len = node.childNodes.length; i < len; i++) {
+			traverseNode(node.childNodes[i], fun);
+		}
+	}
+
+	adjacencyOperators.forEach(function(operator, operatorIndex){
+		var inside = operatorIndex % 2;
+		$.fn[operator] = function(){
+			var argType, nodes = $.map(arguments, function(arg){
+				var arr = [];
+				argType = type(arg);
+				if (argType == "array") {
+					arg.forEach(function(el){
+						if (el.nodeType !== undefined) { return arr.push(el); }
+						else if ($.zepto.isZ(el)) { return arr = arr.concat(el.get()) }
+							arr = arr.concat(zepto.fragment(el))
+					})
+					return arr;
+				}
+				return argType = "object" || arg == null ? 
+						arg : zepto.fragment(arg);
+			}),
+			parent, copyByClone = this.length > 1;
+
+			if (nodes.length < 1) {return this; }
+
+			return this.each(function(_, target){
+				parent = inside ? target : target.parentNode;
+
+				target = operatorIndex == 0 ? target.nextSibling : 
+						 operatorIndex == 1 ? target.firstChild : 
+						 operatorIndex == 2 ? target :
+						 null;
+
+				var parentInDocument = $.contains(document.documentElement, parent);
+
+				nodes.forEach(function(node){
+					if (copyByClone) { node = node.cloneNode(true); }
+					else if (!parent) { return $(node).remove() }
+
+					parent.insertBefore(node, target);
+					if (parentInDocument){
+						traverseNode(node, function(el) {
+							if (el.nodeName != null && el.nodeName.toUpperCase() === 'SCRIPT' &&
+								(!el.type || el.type === 'text/javascript') && !el.src){
+								var target = el.ownerDocument ? el.ownerDocument.defaultView : window;
+								target['evel'].call(target, el.innerHTML);
+							}
+						})
+					}
+				})
+			})
+		}
+	})
+
+	$.fn[inside ? operator + 'To' : 'insert' + (operatorIndex ? 'Before' : 'After')] = function(html){
+		$(html)[operator](this);
+		return this;
+	}
+
+	zepto.Z.prototype = Z.prototype = $.fn;
+
+	zepto.uniq = uniq;
+	zepto.deserializeValue = deserializeValue;
+	$.zepto = zepto;
+
 })
