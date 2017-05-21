@@ -302,7 +302,8 @@
     value == null ? node.removeAttribute(name) : node.setAttribute(name, value)
   }
 
-  // access className property while respecting SVGAnimatedString
+  // value没有值则获取className
+  // 有值则赋值给className
   function className(node, value){
     var klass = node.className || '',
         svg   = klass && klass.baseVal !== undefined
@@ -453,6 +454,7 @@
     size: function(){
       return this.length
     },
+    // 删除元素自身。获取元素的父节点，从父节点调用removeChild删除自身
     remove: function(){
       return this.each(function(){
         if (this.parentNode != null)
@@ -608,18 +610,23 @@
         contents.length ? contents.wrapAll(dom) : self.append(dom)
       })
     },
+    // 删除元素的父节点，并保存元素的位置
     unwrap: function(){
       this.parent().each(function(){
         $(this).replaceWith($(this).children())
       })
       return this
     },
+    // 深度克隆复制元素
     clone: function(){
       return this.map(function(){ return this.cloneNode(true) })
     },
+    // 隐藏元素
     hide: function(){
       return this.css("display", "none")
     },
+    // 显示或者隐藏元素
+    // 参数为true则显示，为false则隐藏
     toggle: function(setting){
       return this.each(function(){
         var el = $(this)
@@ -628,6 +635,7 @@
     },
     prev: function(selector){ return $(this.pluck('previousElementSibling')).filter(selector || '*') },
     next: function(selector){ return $(this.pluck('nextElementSibling')).filter(selector || '*') },
+    // 设置对象或者集合中的innerHTML值
     html: function(html){
       return 0 in arguments ?
         this.each(function(idx){
@@ -636,6 +644,7 @@
         }) :
         (0 in this ? this[0].innerHTML : null)
     },
+    // 获取或设置集合中元素的文本内容
     text: function(text){
       return 0 in arguments ?
         this.each(function(idx){
@@ -643,7 +652,10 @@
           this.textContent = newText == null ? '' : ''+newText
         }) :
         (0 in this ? this.pluck('textContent').join("") : null)
-    },
+    }、
+    // 如果value值为空，则获取DOM节点数组中第一个节点的attr属性
+    // 如果不为空，则为所有节点添加属性
+    // 如果传进来的是对象则拆解添加到节点属性中
     attr: function(name, value){
       var result
       return (typeof name == 'string' && !(1 in arguments)) ?
@@ -654,6 +666,7 @@
           else setAttribute(this, name, funcArg(this, value, idx, this.getAttribute(name)))
         })
     },
+    // 删除DOM数组中属性名为name的属性
     removeAttr: function(name){
       return this.each(function(){ this.nodeType === 1 && name.split(' ').forEach(function(attribute){
         setAttribute(this, attribute)
@@ -758,6 +771,12 @@
         return this.test(className(el))
       }, classRE(name))
     },
+
+    // 给节点添加class
+    // 1、$选中的可能是DOM节点数组，所以需要使用each
+    // 2、获取DOM节点中已经有的class，判断传进来的参数是不是函数
+    // 3、将参数添加到class数组，如果节点已经存在该class，则不做处理
+    // 4、最后将class添加到节点中
     addClass: function(name){
       if (!name) return this
       return this.each(function(idx){
